@@ -473,6 +473,7 @@ function VuePatron(props) {
   var stocks=props.stocks, cmdBoutiques=props.cmdBoutiques, jourSel=props.jourSel;
   var presence=props.presence, haccp=props.haccp, inventaires=props.inventaires;
   var anticipation=props.anticipation||{}, setAnticipation=props.setAnticipation||function(){};
+  var pertes=props.pertes||{};
   // plats est un objet {id: {nom,cat,dlc,prix}} - convertir en liste
   var platsList = fbToArray(plats, CATALOGUE_INIT);
 
@@ -508,6 +509,37 @@ function VuePatron(props) {
   var totalInv = marchesJour.reduce(function(a,m){
     return a + platsList.reduce(function(b,p){return b+getStockEmp(stocks,m,p.id);}, 0);
   }, 0);
+
+  function exportPertes() {
+    var today = new Date();
+    var mois = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+    var rows = Object.values(pertes).filter(function(r){
+      return r.date && r.date.indexOf(mois)===0;
+    }).sort(function(a,b){return a.date>b.date?1:-1;});
+    var header = "Date;Boutique;Plat;Quantite";
+    var lines = rows.map(function(r){
+      return [r.date, r.boutique||"", r.plat||"", r.qte||0].join(";");
+    });
+    var csv = [header].concat(lines).join("
+");
+    var blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "kouzina-pertes-"+mois+".csv";
+    a.click();
+  }
+
+  // Résumé pertes du mois en cours
+  var today2 = new Date();
+  var moisCourant = today2.getFullYear()+"-"+String(today2.getMonth()+1).padStart(2,"0");
+  var pertesParPlat = {};
+  Object.values(pertes).forEach(function(r){
+    if(!r.date||r.date.indexOf(moisCourant)!==0) return;
+    var key = (r.plat||"")+"_"+(r.boutique||"");
+    if(!pertesParPlat[key]) pertesParPlat[key]={plat:r.plat,boutique:r.boutique,total:0};
+    pertesParPlat[key].total += (r.qte||0);
+  });
+  var pertesListe = Object.values(pertesParPlat).sort(function(a,b){return b.total-a.total;});
 
   function exportCSV() {
     var rows = Object.values(haccp || {}).sort(function(a,b){return new Date(b.date)-new Date(a.date);}).slice(0,60);
@@ -644,12 +676,31 @@ function VuePatron(props) {
       );
     }),
 
+    // Résumé pertes du mois
+    pertesListe.length > 0 && h("div",{style:{marginTop:20}},
+      h("div",{style:{fontSize:11,fontWeight:800,letterSpacing:2,color:C.gold,
+        textTransform:"uppercase",marginBottom:10}},"Pertes ce mois"),
+      pertesListe.map(function(item,i){
+        return h("div",{key:i,style:{display:"flex",justifyContent:"space-between",
+          padding:"8px 12px",background:i%2===0?"#fff5f5":"#fee2e2",
+          borderRadius:8,marginBottom:3}},
+          h("div",null,
+            h("div",{style:{fontWeight:600,fontSize:13,color:"#991b1b"}},item.plat),
+            h("div",{style:{fontSize:11,color:C.gris}},item.boutique)
+          ),
+          h("span",{style:{fontWeight:800,fontSize:15,color:"#991b1b"}},fmt(item.total)+" u.")
+        );
+      })
+    ),
+
     // Boutons admin
     h("div",{style:{marginTop:20,display:"flex",flexDirection:"column",gap:10}},
       h(BtnSecondary,{onClick:function(){setShowCat(true);},style:{width:"100%",padding:12}},
         "Gérer le catalogue des plats"),
       Object.keys(haccp||{}).length > 0 && h(BtnPrimary,{onClick:exportCSV,style:{width:"100%",padding:12}},
-        "Exporter relevés HACCP (CSV)")
+        "Exporter relevés HACCP (CSV)"),
+      Object.keys(pertes).length > 0 && h(BtnPrimary,{onClick:exportPertes,style:{width:"100%",padding:12,background:"#991b1b"}},
+        "Exporter pertes (CSV)")
     ),
   );
 }
@@ -933,7 +984,6 @@ function VuePreparateur(props) {
   var plats=props.plats, dotations=props.dotations;
   var platsList = fbToArray(plats, CATALOGUE_INIT);
   var cmdBoutiques=props.cmdBoutiques, stocks=props.stocks, jourSel=props.jourSel;
-  // reassort passed via props for display
 
   var jourSuiv = getJourSuiv(jourSel);
   var marchesSuiv = getMarchesJour(jourSuiv);
@@ -1009,9 +1059,15 @@ function VuePreparateur(props) {
         h("div",{style:{background:C.vert,height:"100%",borderRadius:99,
           width:(totalCoche/platsConc.length*100)+"%",transition:"width .3s"}})
       ),
-      platsConc.length===0
+      platsList.length===0
         ? h("div",{style:{textAlign:"center",padding:"20px 0",color:C.gris}},
-            "Aucune commande / dotation pour ce point.")
+            "Chargement des plats...")
+        : platsConc.length===0
+        ? h("div",{style:{textAlign:"center",padding:"20px 0",color:C.gris}},
+            h("div",{style:{fontSize:14,fontWeight:700,color:C.navy,marginBottom:8}},
+              isMarcheS ? "Dotation vide pour ce marche" : "Aucune commande passee"),
+            h("div",{style:{fontSize:12}},
+              isMarcheS ? "Verifiez les dotations dans la vue Marches" : "La boutique doit passer commande avant 14h"))
         : CATS.map(function(cat){
             var liste=platsConc.filter(function(p){return p.cat===cat;});
             if(!liste.length) return null;
@@ -1043,7 +1099,7 @@ function VuePreparateur(props) {
           }),
       platsConc.length>0&&totalCoche===platsConc.length&&h("div",{style:{marginTop:14,
         background:"#d4edda",borderRadius:10,padding:"12px 16px",textAlign:"center",
-        fontSize:14,color:"#065f46",fontWeight:700}},"Caisse complète pour "+point+" !"),
+        fontSize:14,color:"#065f46",fontWeight:700}},"Caisse complète pour "+point+" !")
     )
   );
 }
@@ -1596,8 +1652,6 @@ function App() {
   var _sn=useLocalStr("kouzina_nom"); var nomVendeur=_sn[0]; var saveNom=_sn[1];
   var _sp=React.useState(false); var perm=_sp[0]; var setPerm=_sp[1];
   var _sa=React.useState(null); var alerte=_sa[0]; var setAlerte=_sa[1];
-  var _se=React.useState(false); var timeoutErr=_se[0]; var setTimeoutErr=_se[1];
-
   var _d1=useFirebase("kouzina/plats",        CATALOGUE_INIT); var plats=_d1[0];var setPlats=_d1[1];var platsR=_d1[2];
   var _d2=useFirebase("kouzina/dotations",    DOTATIONS_INIT); var dotations=_d2[0];var setDotations=_d2[1];var dotR=_d2[2];
   var _d3=useFirebase("kouzina/stocks",       {});             var stocks=_d3[0];var setStocks=_d3[1];var stocksR=_d3[2];
@@ -1611,17 +1665,14 @@ function App() {
 
   var _d13=useFirebase("kouzina/pertes",{}); var pertes=_d13[0];var setPertes=_d13[1];var pertesR=_d13[2];
 
-  var appReady = platsR&&dotR&&stocksR&&antR&&cmdR&&fichR&&mepR&&presR&&haccpR&&inventR&&pertesR;
-
-  // Timeout erreur : se déclenche seulement si Firebase ne répond PAS du tout
-  // S'annule automatiquement dès que tout est chargé
+  var appReady = platsR&&dotR&&stocksR&&cmdR&&fichR&&mepR&&presR&&haccpR&&inventR&&antR&&pertesR;
+  // Fallback : forcer l'affichage après 6 secondes si Firebase connecté
+  var _sf2 = React.useState(false); var forcedOpen = _sf2[0]; var setForcedOpen = _sf2[1];
   React.useEffect(function(){
-    if (appReady) return; // déjà chargé, rien à faire
-    var t = setTimeout(function(){
-      setTimeoutErr(true);
-    }, 30000);
+    var t = setTimeout(function(){ setForcedOpen(true); }, 6000);
     return function(){ clearTimeout(t); };
-  }, [appReady]);
+  }, []);
+  var canRender = appReady || forcedOpen;
 
   // Notifications
   React.useEffect(function(){
@@ -1647,15 +1698,7 @@ function App() {
 
   if (!nomVendeur) return h(ModalPrenom,{onSave:saveNom});
 
-  if (timeoutErr) return h("div",{style:{minHeight:"100vh",background:C.cream,display:"flex",
-    flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:C.sans,padding:24,textAlign:"center"}},
-    h("div",{style:{fontSize:28,marginBottom:12}},"!!"),
-    h("div",{style:{fontSize:18,fontWeight:800,color:C.navy,marginBottom:8}},"Connexion impossible"),
-    h("div",{style:{fontSize:13,color:C.gris,marginBottom:24}},"Vérifiez votre connexion internet"),
-    h(BtnPrimary,{onClick:function(){window.location.reload();},style:{padding:"12px 32px",fontSize:15}},"Réessayer")
-  );
-
-  if (!appReady) return h("div",{style:{minHeight:"100vh",background:C.cream,display:"flex",
+  if (!canRender) return h("div",{style:{minHeight:"100vh",background:C.cream,display:"flex",
     flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:C.sans}},
     h("div",{style:{fontSize:32,fontFamily:C.serif,fontWeight:800,color:C.navy,marginBottom:8}},"KOUZINA"),
     h("div",{style:{fontSize:13,color:C.gris,marginBottom:24}},"Connexion en cours..."),
@@ -1739,10 +1782,10 @@ function App() {
 
     // Contenu
     h("div",{style:{maxWidth:820,margin:"0 auto",padding:"22px 14px 60px"}},
-      vue==="patron"      && h(VuePatron,{plats:plats,setPlats:setPlats,dotations:dotations,stocks:stocks,cmdBoutiques:cmdBoutiques,jourSel:jourSel,presence:presence,haccp:haccp,inventaires:inventaires,anticipation:anticipation,setAnticipation:setAnticipation}),
+      vue==="patron"      && h(VuePatron,{plats:plats,setPlats:setPlats,dotations:dotations,stocks:stocks,cmdBoutiques:cmdBoutiques,jourSel:jourSel,presence:presence,haccp:haccp,inventaires:inventaires,anticipation:anticipation,setAnticipation:setAnticipation,pertes:pertes}),
       vue==="cuisine"     && h(VueCuisine,{plats:plats,dotations:dotations,stocks:stocks,setStocks:setStocks,cmdBoutiques:cmdBoutiques,jourSel:jourSel,inventaires:inventaires,setInventaires:setInventaires}),
       vue==="marche"      && h(VueMarche,{plats:plats,dotations:dotations,setDotations:setDotations,stocks:stocks,setStocks:setStocks,jourSel:jourSel,nomVendeur:nomVendeur,presence:presence,setPresence:setPresence}),
-      vue==="preparateur" && h(VuePreparateur,{plats:plats,dotations:dotations,cmdBoutiques:cmdBoutiques,stocks:stocks,jourSel:jourSel,reassort:reassort}),
+      vue==="preparateur" && h(VuePreparateur,{plats:plats,dotations:dotations,cmdBoutiques:cmdBoutiques,stocks:stocks,jourSel:jourSel}),
       vue==="boutique"    && h(VueBoutique,{plats:plats,stocks:stocks,setStocks:setStocks,dotations:dotations,cmdBoutiques:cmdBoutiques,setCmdBoutiques:setCmdBoutiques,jourSel:jourSel,nomVendeur:nomVendeur,haccp:haccp,setHaccp:setHaccp,anticipation:anticipation,setAnticipation:setAnticipation,pertes:pertes,setPertes:setPertes}),
       vue==="fiches"      && h(VueFiches,{plats:plats,fiches:fiches,setFiches:setFiches,miseEnPlace:miseEnPlace,setMiseEnPlace:setMiseEnPlace})
     )
